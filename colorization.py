@@ -2,6 +2,7 @@ import torch.nn as nn
 from resnet import _resnet, BasicBlock
 import torch
 import torch.optim as optim
+import numpy as np
 
 # class BatchNorm3D(nn.Module):
 #     """docstring for myBatchNorm3D"""
@@ -20,13 +21,14 @@ import torch.optim as optim
 #         return out
 
 
+
 class Colorization(nn.Module):
     def __init__(self):
         super(Colorization, self).__init__()
 
         self.resnet = _resnet('resnet18', BasicBlock, [2, 2, 2, 2], False, True)
 
-        self.conv3d_1 = self._make_3Dlayer(dilation=1)
+        self.conv3d_1 = self._make_3Dlayer(dilation=1, in_channel=258)
         self.conv3d_2 = self._make_3Dlayer(dilation=2)
         self.conv3d_3 = self._make_3Dlayer(dilation=4)
         self.conv3d_4 = self._make_3Dlayer(dilation=8)
@@ -37,6 +39,27 @@ class Colorization(nn.Module):
                                 dilation=1,
                                 stride=1,
                                 padding=(0,0,0))
+        self.device = "cpu"
+
+    def setdev(self, device):
+        self.device = device
+        # self.to(device)
+
+    def create_spatial_features(self, B, S, W):
+        ft_size = W
+        row = []
+        increment = 2.0 / float(ft_size - 1)
+        for i in range(ft_size):
+            row.append(-1 + i * increment)
+        row = np.array(row)
+        horizontal = np.stack([row] * ft_size)
+        vertical = np.transpose(horizontal, [1, 0])
+        spatial_feautre = np.stack([horizontal, vertical])
+        sample_spatial = np.stack([spatial_feautre] * S)
+        batch_spatial = np.stack([sample_spatial] * B)
+        spatial_feautre = torch.from_numpy(batch_spatial).type(torch.float32)
+        spatial_feautre = spatial_feautre.to(self.device)
+        return spatial_feautre
 
     def _make_3Dlayer(self, in_channel=256, out_channel=256,
                       stride=1, padding=1, kernel_size=3, dilation=2):
@@ -49,6 +72,8 @@ class Colorization(nn.Module):
                                 padding=(0, dilation, dilation)))
         layers.append(nn.BatchNorm3d(out_channel))
         layers.append(nn.ReLU(inplace=True))
+        if in_channel != out_channel:
+            in_channel = out_channel
         layers.append(nn.Conv3d(in_channels=in_channel,
                                 out_channels=out_channel,
                                 kernel_size=(kernel_size, 1, 1),
@@ -73,9 +98,12 @@ class Colorization(nn.Module):
         W = H = 32
         C = 256
         x = x.reshape(N, S, C, H, W)
+        spatial_features = self.create_spatial_features(N, S, W)
+        x = torch.cat((x, spatial_features), dim=2)
         # number of batches, channels, number of samples, height, width
         x = x.transpose(1,2)
 
+        #3DConv Network
         x = self.conv3d_1(x)
         x = self.conv3d_2(x)
         x = self.conv3d_3(x)
@@ -93,6 +121,8 @@ class Colorization(nn.Module):
 
 
 if __name__ == "__main__":
+    # create_spatial_features(16, 4, 32)
+
     model = Colorization()
     print(model)
 

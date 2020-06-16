@@ -45,12 +45,21 @@ class KineticsClustering(Dataset):
             self.metas.append(metas[key])
 
         self.index = list(range(len(self.keys)))
-
+        self.existing_keys = self.get_existing()
 
     def __len__(self):
         #TODO correct this line
-        return len(self.index)
+        return len(self.existing_keys)
         # return 10000
+
+    def get_existing(self):
+        existing_keys = []
+        for key in self.keys:
+            path = os.path.join(self.base_path, "processed", key + ".mp4")
+            if os.path.exists(path):
+                if not os.path.exists(os.path.join(self.base_path, "clustering", key+"_8.pickle")):
+                    existing_keys.append((key, path))
+        return existing_keys
 
     def get_filename(self, name):
         if name not in self.keys:
@@ -70,12 +79,13 @@ class KineticsClustering(Dataset):
             idx = idx.tolist()
 
         #TODO correct this line
-        name = self.metas[idx]['key']
+        # name = self.metas[idx]['key']
+        name, filename_image = self.existing_keys[idx]
         # name = self.metas[0]['key']
-        exists, filename_label, filename_image = self.get_filename(name)
-        if not exists:
-            print("Not existing video.")
-            return None, None, None, None
+        # exists, filename_label, filename_image = self.get_filename(name)
+        # if not exists:
+        #     print("Not existing video.")
+        #     return None, None, None, None
         images_big = []
         images_small = []
         images_big_color = []
@@ -101,7 +111,13 @@ class KineticsClustering(Dataset):
             images_big_color.append(image_big_color)
 
 
+        if len(images_big) == 0:
+            print("No frames are retreived: {}".format(name))
+            return torch.empty(3,3,256,256), torch.empty(3,3,256,256), torch.empty(3,3,32,32), "Err"
         crop_size = int(len(images_big)/self.num_frames) * 4
+        if crop_size < self.num_frames:
+            print("Video has less than 4 frames: {}".format(name))
+            return torch.empty(3,3,256,256), torch.empty(3,3,256,256), torch.empty(3,3,32,32), "Err"
         images_big = images_big[:crop_size]
         images_small = images_small[:crop_size]
         images_big_color = images_big_color[:crop_size]

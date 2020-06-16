@@ -7,27 +7,31 @@ from torchvision import transforms
 from labels_viewer import GenerateLabelImage
 import cv2
 import os
+import matplotlib.pyplot as plt
+import numpy as np
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    kinetics_path = "./data"
+    kinetics_path = "/opt/data"
     trainset = KineticsClustered(base_path=kinetics_path)
 
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=15,
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=32,
                                               shuffle=False, num_workers=0)
 
     model = Colorization()
-    print(model)
-    model.to(device)
+    # model.load_state_dict(torch.load("/opt/model/8/models/model{}.pth".format(65999)))
+    # print(model)
+    model.setdev(device)
+    parallel_model = nn.DataParallel(model, device_ids=[0, 1])
+    parallel_model.to(device)
 
 
     criterion = nn.CrossEntropyLoss()
     # optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(parallel_model.parameters(), lr=0.001)
 
     loss_values = []
 
-    flag = False
     for epoch in range(10):  # loop over the dataset multiple times
         running_loss = 0.0
         for i, data in enumerate(trainloader, 0):
@@ -40,7 +44,7 @@ if __name__ == "__main__":
             optimizer.zero_grad()
 
             # features = number of batches, channels, number of samples, height, width
-            features = model.forward(inputs)
+            features = parallel_model.forward(inputs)
             H = 32
             W = 32
             # features = number of batches, number of samples, channels, height * width
@@ -66,54 +70,67 @@ if __name__ == "__main__":
             loss.backward()
             optimizer.step()
 
-            if i == 0:
-                #Write the images
-                prediction_cpu = prediction.cpu()
-                prediction_matrix = nn.functional.softmax(prediction_cpu, dim=2)
-                prediction_matrix = torch.argmax(prediction_matrix, dim=2).view(-1, 32, 32)
-                prediction_matrix = torch.split(prediction_matrix, 1)
-                target_labels_list = torch.split(target_labels, 1)
-                outpath = "./data/train/{}_{}".format(epoch, i+1)
-                if os.path.exists(outpath) == False:
-                    os.mkdir("./data/train/{}_{}".format(epoch, i+1))
-                j = 0
-                for pm, tl in zip(prediction_matrix, target_labels_list):
-                    prediction_img = GenerateLabelImage(pm)
-                    cv2.imwrite("./data/train/{}_{}/pred{}.png".format(epoch, i+1, j), prediction_img)
-                    tl = tl.view(32, 32)
-                    gt_img = GenerateLabelImage(tl)
-                    cv2.imwrite("./data/train/{}_{}/gt{}.png".format(epoch, i+1, j), gt_img)
-                    j = j  + 1
-
-                with open("./data/train/{}_{}/loss".format(epoch, i+1), "w") as f:
-                    f.write(str(loss.item()))
+            # if i == 0:
+            #     #Write the images
+            #     prediction_cpu = prediction.cpu()
+            #     prediction_matrix = nn.functional.softmax(prediction_cpu, dim=2)
+            #     prediction_matrix = torch.argmax(prediction_matrix, dim=2).view(-1, 32, 32)
+            #     prediction_matrix = torch.split(prediction_matrix, 1)
+            #     target_labels_list = torch.split(target_labels, 1)
+            #     outpath = "./data/train/{}_{}".format(epoch, i+1)
+            #     if os.path.exists(outpath) == False:
+            #         os.mkdir("./data/train/{}_{}".format(epoch, i+1))
+            #     j = 0
+            #     for pm, tl in zip(prediction_matrix, target_labels_list):
+            #         prediction_img = GenerateLabelImage(pm)
+            #         cv2.imwrite("./data/train/{}_{}/pred{}.png".format(epoch, i+1, j), prediction_img)
+            #         tl = tl.view(32, 32)
+            #         gt_img = GenerateLabelImage(tl)
+            #         cv2.imwrite("./data/train/{}_{}/gt{}.png".format(epoch, i+1, j), gt_img)
+            #         j = j  + 1
+            #
+            #     with open("./data/train/{}_{}/loss".format(epoch, i+1), "w") as f:
+            #         f.write(str(loss.item()))
 
             # print statistics
+            print('[%d, %5d] loss: %.3f' %
+                  (epoch + 1, i, loss.item()))
             running_loss += loss.item()
+
+            if i == 60000:
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = 0.0001
+                print("lr is changed to: {}".format("0.0001"))
+
             if i % 20 == 19:    # print every 2000 mini-batches
                 running_loss = running_loss / 20.
                 loss_values.append(running_loss)
-                print('[%d, %5d] loss: %.3f' %
-                      (epoch + 1, i + 1, running_loss))
-
-                #Write the images
-                prediction_cpu = prediction.cpu()
-                prediction_matrix = nn.functional.softmax(prediction_cpu, dim=2)
-                prediction_matrix = torch.argmax(prediction_matrix, dim=2).view(-1, 32, 32)
-                prediction_matrix = torch.split(prediction_matrix, 1)
-                target_labels_list = torch.split(target_labels, 1)
-                outpath = "./data/train/{}_{}".format(epoch, i+1)
-                if os.path.exists(outpath) == False:
-                    os.mkdir("./data/train/{}_{}".format(epoch, i+1))
-                j = 0
-                for pm, tl in zip(prediction_matrix, target_labels_list):
-                    prediction_img = GenerateLabelImage(pm)
-                    cv2.imwrite("./data/train/{}_{}/pred{}.png".format(epoch, i+1, j), prediction_img)
-                    j = j  + 1
-
-                with open("./data/train/{}_{}/loss".format(epoch, i+1), "w") as f:
-                    f.write(str(running_loss))
-
                 #Reset loss
                 running_loss = 0.0
+
+            if i % 1000 == 999:
+                torch.save(parallel_model.state_dict(), "/opt/model/8/train2/models/model{}.pth".format(i))
+                plt.clf()
+                plt.plot(np.array(loss_values), 'r')
+                plt.savefig("/opt/model/8/train2/figures/graph{}.png".format(i+1))
+
+                # #Write the images
+                # prediction_cpu = prediction.cpu()
+                # prediction_matrix = nn.functional.softmax(prediction_cpu, dim=2)
+                # prediction_matrix = torch.argmax(prediction_matrix, dim=2).view(-1, 32, 32)
+                # prediction_matrix = torch.split(prediction_matrix, 1)
+                # target_labels_list = torch.split(target_labels, 1)
+                # outpath = "./data/train/{}_{}".format(epoch, i+1)
+                # if os.path.exists(outpath) == False:
+                #     os.mkdir("./data/train/{}_{}".format(epoch, i+1))
+                # j = 0
+                # for pm, tl in zip(prediction_matrix, target_labels_list):
+                #     prediction_img = GenerateLabelImage(pm)
+                #     cv2.imwrite("./data/train/{}_{}/pred{}.png".format(epoch, i+1, j), prediction_img)
+                #     j = j  + 1
+                #
+                # with open("./data/train/{}_{}/loss".format(epoch, i+1), "w") as f:
+                #     f.write(str(running_loss))
+
+
     print ("Training end!!")
